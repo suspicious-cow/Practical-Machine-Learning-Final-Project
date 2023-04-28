@@ -1,22 +1,27 @@
 ---
-title: "Title Here"
+title: "Exercise Qualtiy Prediction"
 author: "Zain Naboulsi"
-date: "2023-04-27"
+date: "2023-04-29"
 output:
   html_document:
     toc: yes
+    theme: cosmo
+    highlight: tango
     
   pdf_document:
     toc: yes
+    keep_tex: yes
+    number_sections: yes
+    toc_depth: 3
     
 editor_options: 
   markdown: 
     wrap: 80
 ---
-```{r setup, include = FALSE}
-knitr::opts_chunk(echo = FALSE)
-```
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
 ```{r, echo = FALSE, warning = FALSE, error = FALSE, appendix = TRUE}
 # set a seed in case we use any random values
 set.seed(1337)
@@ -34,13 +39,9 @@ for (lib in required_libraries) {
 
 ```
 
-
-
-
-
 \newpage
-# Appendix: All Source Code
+# Appendix
 
+## Source Code
 ```{r ref.label = knitr::all_labels(appendix == TRUE), echo=TRUE, eval=FALSE}
 ```
-
