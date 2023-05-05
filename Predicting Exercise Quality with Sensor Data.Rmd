@@ -1,0 +1,467 @@
+---
+title: "Predicting Exercise Quality with Sensor Data"
+author: "Zain Naboulsi"
+date: "2023-05-4"
+output:
+  html_document:
+    toc: yes
+    theme: cosmo
+    highlight: tango
+    
+  pdf_document:
+    toc: yes
+    keep_tex: yes
+    number_sections: yes
+    toc_depth: 3
+    
+editor_options: 
+  markdown: 
+    wrap: 80
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Abstract
+Activity recognition research has primarily centered on identifying different 
+activities, or predicting "which" action occurred at a specific moment. However, 
+the execution quality, or the "how (well)," has been largely overlooked, even 
+though it can offer valuable insights for numerous applications. In this work, 
+we focus on detecting execution mistakes as a vital aspect of qualitative 
+activity recognition.
+
+Thanks to devices like Jawbone Up, Nike FuelBand, and Fitbit, collecting 
+extensive personal activity data has become affordable and accessible. These 
+devices are part of the quantified self movement, where individuals regularly 
+monitor various aspects of their lives to improve their well-being, discover 
+behavioral patterns, or simply because they enjoy technology. While people often 
+track the quantity of an activity, assessing its quality remains rare.
+
+In this project, we aim to evaluate the quality of barbell lifts using data from 
+accelerometers placed on participants' belts, forearms, arms, and dumbbells. 
+The six participants performed barbell lifts correctly and incorrectly in five 
+different manners. We demonstrate our approach to assessing and providing 
+feedback on weightlifting exercises using a sensor-based technique for 
+qualitative activity recognition in this study.
+
+```{r, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE, appendix = TRUE}
+# set a seed in case we use any random values
+set.seed(1337)
+
+# Set the names of the packages and libraries you want to install
+required_libraries <- c("magrittr", "randomForest", "caret", "gbm", "xgboost", "kernlab", "e1071", "combinat")
+
+# Install missing packages and load all required libraries
+for (lib in required_libraries) {
+  if (!requireNamespace(lib, quietly = TRUE)) {
+    install.packages(lib)
+  }
+  library(lib, character.only = TRUE)
+}
+
+
+```
+
+
+
+## Data Cleaning  
+
+### Missing Data  
+
+We carried out several steps to clean and prepare the dataset for analysis. 
+First, we loaded the original dataset. Next, we set a threshold for missing 
+data in each variable (column) at 10%. Any variable with more than 10% missing 
+data was removed from the dataset to create a "cleaned" version of the data.
+
+### Unrelated Variables  
+
+Following that, we identified and removed variables that are unrelated to the 
+analysis being conducted. By excluding these variables, the cleaned dataset 
+becomes more focused and relevant to our study. In this case the variables 
+removed were "X","user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", 
+"cvtd_timestamp", "new_window", and "num_window"
+
+### Factor Conversion  
+
+Lastly, we ensure that the variable, "classe," is converted to a factor data 
+type. This conversion is essential for certain statistical methods and analyses 
+that will be performed later on in the study.
+
+```{r, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE, appendix = TRUE}
+# Assuming the dataset is in a CSV format, load the dataset
+data <- read.csv("pml-training.csv")
+
+# Remove variables with missing values
+threshold <- 0.9 * nrow(data)
+data_clean <- data[, colSums(is.na(data)) < threshold]
+
+# Remove unnecessary variables
+unrelated_vars <- c("X","user_name", "raw_timestamp_part_1", 
+                    "raw_timestamp_part_2", "cvtd_timestamp", "new_window", 
+                    "num_window")
+data_clean <- data_clean[ , !(names(data_clean) %in% unrelated_vars)]
+
+# Ensure the response variable is a factor
+data_clean$classe <- as.factor(data_clean$classe)
+
+
+cat("Dimensions of original data:\n", dim(data))
+
+cat("Dimensions of clean data:\n", dim(data_clean))
+      
+```
+
+## Feature Selection  
+
+In order to identify the most relevant features we used the random forest 
+algorithm for predicting the target variable, "classe". This process is intended 
+to enhance the performance and interpretability of the model.
+
+A random forest model was trained using our cleaned dataset, with the target 
+variable "classe" and all other variables as predictors. Once the model is 
+fitted, the importance scores of the variables are used to select the top 20 
+variables.
+
+```{r, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE, appendix = TRUE}
+# Feature selection using randomForest
+set.seed(1337)
+rf <- randomForest(classe ~ ., data = data_clean, importance = TRUE)
+
+
+# Extract variable importance
+importance_matrix <- as.data.frame(rf$importance)
+rownames(importance_matrix) <- colnames(data_clean)[!colnames(data_clean)
+                                                    %in% "classe"]
+
+# Order variables by importance
+importance_order <- order(importance_matrix$MeanDecreaseGini, decreasing = TRUE)
+
+# Select top N most important variables
+N <- 20
+selected_vars <- rownames(importance_matrix)[importance_order[1:N]]
+data_selected <- data_clean[, c(selected_vars, "classe")]
+
+# Check the selected variables
+names(data_selected)
+
+# create a graph to show importance visually
+# Sort the importance scores in decreasing order
+importance_sorted <- importance_matrix[order(importance_matrix$MeanDecreaseGini, decreasing = TRUE),]
+
+# Limit the number of features displayed to the top 20 most important features
+N <- 20
+importance_topN <- importance_sorted[1:N, ]
+
+# Adjust the margins of the plot 
+par(mar = c(5, 8, 2, 2) + 0.1)
+
+# Create a horizontal bar plot of the sorted variable importance scores 
+barplot(importance_topN$MeanDecreaseGini, names.arg = rownames(importance_topN),
+        horiz = TRUE, las = 2, cex.names = 0.7,
+        xlab = "Importance Score",
+        ylab = "",
+        col = "#66b3ff",
+        border = "black")
+
+# Add a title to the plot
+title("Top 20 Feature Importance in the Model", font.main = 2)
+
+# Reset the plot parameters to default
+par(mar = c(5, 4, 4, 2) + 0.1)
+
+```
+
+## Training and Inital Testing Data Sets  
+
+To provide accuracy in selecting our prediction models, we took the original 
+train data and split it into training (70%) and testing (30%) sets. Setting 
+aside our original test data file for the final run of our models after 
+selection.
+
+```{r, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE, appendix = TRUE}
+# Split the dataset into training (70%) and testing (30%) sets
+set.seed(1337)
+trainIndex <- createDataPartition(data_selected$classe, p = 0.7, list = FALSE)
+train <- data_selected[trainIndex, ]
+test <- data_selected[-trainIndex, ]
+
+```
+
+## Models
+
+### Model Selection  
+
+Given the wealth of prediction models available, we decided to randomly pick 
+four for evaluation to determine accuracy. The results were as follows: 
+Random Forest (99.3%), XGBoost (99.2%), k-Nearest Neighbors (90.8%), and Naive 
+Bayes (74.1%). 
+
+### Expected Out of Sample Error  
+
+The expected out of sample error was calculated for each model. The values below
+represent the proportion of incorrect predictions that each model is expected to 
+make on new data. Specifically:
+
+- The Random Forest (rf) model has an expected out-of-sample error of 
+approximately 0.0111, meaning it is expected to make incorrect predictions for 
+about 1.11% of new data points.
+
+- The Extreme Gradient Boosting (xgb) model has an expected out-of-sample error 
+of approximately 0.0100, meaning it is expected to make incorrect predictions 
+for about 1.00% of new data points.
+
+- The k-Nearest Neighbors (knn) model has an expected out-of-sample error of 
+approximately 0.1076, meaning it is expected to make incorrect predictions for 
+about 10.76% of new data points.
+
+- The Naive Bayes (nb) model has an expected out-of-sample error of 
+approximately 0.2556, meaning it is expected to make incorrect predictions for 
+about 25.56% of new data points.
+```{r, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE, appendix = TRUE}
+
+# Set up cross-validation
+trControl <- trainControl(method = "cv", number = 5)
+
+# Train models and evaluate performance
+model_names <- c("rf", "xgb", "knn", "nb")
+methods <- c("rf", "xgbTree", "knn", "naive_bayes")
+
+results <- list()
+resampling_results <- list()
+
+for (i in 1:length(model_names)) {
+  set.seed(1337)
+  
+  # Check if the current model is "xgb" and apply the unique setting
+  if (model_names[i] == "xgb") {
+    model <- caret::train(classe ~ ., data = train, method = methods[i], 
+                          trControl = trControl, verbose = FALSE, verbosity = 0)
+  } else {
+    model <- caret::train(classe ~ ., data = train, method = methods[i], 
+                          trControl = trControl)
+  }
+  
+  pred <- predict(model, test)
+  accuracy <- mean(pred == test$classe)
+  results[[model_names[i]]] <- list(model = model, accuracy = accuracy)
+  
+  # Store resampling results for each model
+  resampling_results[[model_names[i]]] <- model$resample
+}
+
+# Calculate expected out-of-sample error for each model
+expected_out_of_sample_error <- sapply(resampling_results, 
+                                       function(x) mean(1 - x$Accuracy))
+
+# Print expected out-of-sample error for each model
+cat("Expected Out of Sample Error", "\n", expected_out_of_sample_error)
+
+# Convert 'expected_out_of_sample_error' to a data frame 
+expected_error_df <- data.frame(
+  Model = names(expected_out_of_sample_error),
+  Error = as.numeric(expected_out_of_sample_error)
+)
+
+# Create a bar plot 
+ggplot(expected_error_df, aes(x = Model, y = Error, fill = Model)) +
+  geom_bar(stat = "identity", color = "black", width = 0.6) +
+  scale_fill_manual(values = c("rf" = "#66b3ff", "xgb" = "#ff9999", "knn" = "#99ff99", "nb" = "#ffcc99")) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  ) +
+  labs(
+    title = "Expected Out-of-Sample Error",
+    x = "Models",
+    y = "Error"
+  )
+
+```
+
+### Cross Validation  
+
+Through the implementation of cross-validation, we opted for a more reliable 
+evaluation of the models' capabilities to handle previously unencountered data. 
+This process minimizes the likelihood of overfitting and offers a better 
+assessment of how well these models are expected to perform with new data.
+
+### Picking the Best Combination of Models  
+
+They were then evaluated through every combination of models to 
+find the best mix with the most accuracy. Ultimately, the joining of Random 
+Forest and XGBoost produced an estimated accuracy of 99.3%. While this matches
+the accuracy of Random Forest alone, we felt that having more than one model 
+was ideal.  
+
+Additionally, While both methods rely on decision trees, they utilize distinct 
+strategies for amalgamating and refining these structures. Random Forest 
+generates numerous trees independently and combines their forecasts, whereas 
+XGBoost constructs trees sequentially, learning from prior tree errors.
+
+Owing to these variances, RF and XGB were deemed diverse enough for 
+inclusion in a composite model. Merging their estimations should enhance 
+overall performance and reduce overfitting. 
+
+```{r, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE, appendix = TRUE}
+
+
+# Function to create ensemble for a given combination of models
+get_ensemble_accuracy <- function(models, results, test) {
+  ensemble_preds <- list()
+  
+  for (model_name in models) {
+    prob_preds <- predict(results[[model_name]]$model, test, type = "prob")
+    # Ensure that the columns are ordered consistently
+    prob_preds <- prob_preds[, sort(colnames(prob_preds))]
+    ensemble_preds[[model_name]] <- prob_preds
+  }
+  
+  avg_probs <- Reduce("+", ensemble_preds) / length(ensemble_preds)
+  final_pred <- colnames(avg_probs)[max.col(avg_probs, ties.method = "first")]
+  ensemble_accuracy <- mean(final_pred == test$classe)
+  
+  return(ensemble_accuracy)
+}
+
+library(ggplot2)
+
+# Create an empty data frame to store ensemble results
+ensemble_results <- data.frame()
+
+# Iterate through all possible combinations of models
+for (num_models in 2:length(model_names)) {
+  combinations <- combn(model_names, num_models, simplify = FALSE)
+  
+  for (combination in combinations) {
+    ensemble_accuracy <- get_ensemble_accuracy(combination, results, test)
+    
+    # Store the combination and accuracy in the ensemble_results data frame
+    ensemble_results <- rbind(ensemble_results, data.frame(
+      Combination = paste(combination, collapse = ", "),
+      Accuracy = ensemble_accuracy
+    ))
+  }
+}
+
+# Find the best combination and accuracy
+best_accuracy <- max(ensemble_results$Accuracy)
+best_combination <- ensemble_results$Combination[which.max(ensemble_results$Accuracy)]
+
+cat("Best combination:", best_combination, "\n",
+    "Best accuracy:", best_accuracy, "\n")
+
+# Create a bar plot of ensemble accuracies
+ggplot(ensemble_results, aes(x = Combination, y = Accuracy, fill = Combination)) +
+  geom_bar(stat = "identity", color = "black", width = 0.6) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  ) +
+  labs(
+    title = "Ensemble Accuracy for Each Combination",
+    x = "Combinations",
+    y = "Accuracy"
+  )
+
+
+```
+
+## Prediction on the Original Test Data Set
+
+### Methodology  
+
+We employed an ensemble learning strategy to predict class labels for a new set 
+of test instances. Our ensemble consisted of two well-regarded machine learning 
+algorithms: Random Forest (RF) and eXtreme Gradient Boosting (XGBoost). Ensemble 
+learning is a powerful approach that combines predictions from multiple models 
+to enhance overall predictive accuracy and mitigate the risk of overfitting.
+
+### Execution  
+
+The test dataset contained 20 instances, each represented by a set of features. 
+Our goal was to predict the class label for each instance. To achieve this, we 
+used the trained RF and XGBoost models to generate probability predictions for 
+each class. We then computed the average of these probabilities to obtain a 
+consensus prediction. By selecting the class with the highest average 
+probability, we determined the final prediction for each test instance:
+
+```{r, echo = FALSE, warning = FALSE, error = FALSE, message = FALSE, appendix = TRUE}
+# load the final test dataset
+new_test_data <- read.csv("pml-testing.csv")
+
+# Get probability predictions for each class using the trained models
+rf_probs <- predict(results[["rf"]]$model, new_test_data, type = "prob")
+xgb_probs <- predict(results[["xgb"]]$model, new_test_data, type = "prob")
+
+# Ensure that the columns are ordered consistently
+rf_probs <- rf_probs[, sort(colnames(rf_probs))]
+xgb_probs <- xgb_probs[, sort(colnames(xgb_probs))]
+
+# Average the class probabilities
+avg_probs <- (rf_probs + xgb_probs) / 2
+
+# Select the class with the highest probability as the final prediction
+final_pred <- colnames(avg_probs)[max.col(avg_probs, ties.method = "first")]
+
+# The variable final_pred now contains the final predictions for the new_test_data
+cat("Predictions for final test set: ", final_pred)
+
+```
+
+- Class A: 7 occurrences  
+- Class B: 8 occurrences  
+- Class C: 1 occurrence  
+- Class D: 1 occurrence  
+- Class E: 3 occurrences  
+
+## Conclusion  
+
+In conclusion, our results indicate that Class A (performed exactly according 
+to the specification) and Class B (throwing the elbows to the front) were the 
+most commonly predicted classes in the result set, with 7 and 8 occurrences, 
+respectively. Class C (lifting the dumbbell only halfway) and Class D (lowering 
+the dumbbell only halfway) were the least common, each with only 1 occurrence. 
+Class E (throwing the hips to the front) had 3 occurrences in the result set.
+
+Our ensemble learning strategy effectively leveraged the 
+strengths of both RF and XGBoost algorithms to produce accurate predictions for 
+the test instances. By averaging class probability predictions, we obtained a 
+robust set of predictions that demonstrated the value of ensemble learning. This 
+study underscores the potential of ensemble learning for enhancing predictive 
+performance in various research efforts.
+
+
+
+
+\newpage
+# Appendix  
+
+## Citations  
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable 
+Computing: Accelerometers' Data Classification of Body Postures and Movements. 
+*Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances* 
+*in Artificial Intelligence - SBIA 2012*. In: Lecture Notes in Computer Science. 
+, pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. 
+ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
+
+
+Velloso, Eduardo & Bulling, Andreas & Gellersen, Hans & Ugulino, Wallace & Fuks, 
+Hugo. (2013). Qualitative activity recognition of weight lifting exercises. 
+*ACM International Conference Proceeding Series*. 10.1145/2459236.2459256. 
+
+## Further Study  
+
+While we were able to predict correct and incorrect exercises post-facto. It 
+would be interesting to see if the sensor data and models could be used in 
+real-time or near real-time to provide instant feedback to the participant.
+
+## Source Code  
+
+```{r ref.label = knitr::all_labels(appendix == TRUE), echo=TRUE, eval=FALSE}
+```
+
